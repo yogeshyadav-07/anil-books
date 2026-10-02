@@ -203,7 +203,7 @@ function showPay(o) {
   const link = `upi://pay?pa=${encodeURIComponent(upi)}&pn=${encodeURIComponent(name)}&am=${o.amount}&cu=INR&tn=${encodeURIComponent("Order " + o.order_number)}`;
   openOv(`<h2>Complete your payment</h2><p><b>Order #${o.order_number}</b></p><p>Amount: <b class="price">${money(o.amount)}</b></p><p>UPI ID: <b>${esc(upi)}</b></p>
   <div class="row" style="margin:14px 0"><a class="btn" href="${link}">Pay Now</a><button class="btn ghost" id="chk">Check Payment</button></div>
-  <p class="mu">Your order stays <b>Pending</b> until payment is verified. You can check it any time in My Orders.</p><div id="payRes"></div>`);
+  <p class="mu">On a computer? Open your UPI app on your phone and pay this amount to the UPI ID above, with the order number in the note.</p><p class="mu">Your order stays <b>Pending</b> until payment is verified. You can check it any time in My Orders.</p><div id="payRes"></div>`);
   $("#chk").onclick = async e => { const r = await refreshOrder(o.order_id, o.token, e.target); if (r) $("#payRes").innerHTML = orderCard(r, o.token); };
 }
 
@@ -216,13 +216,15 @@ async function refreshOrder(id, token, btn) {
     if (!data) throw new Error("Order not found."); if (data.payment_status === "Pending") toast("Payment is pending verification"); return data;
   }, btn, "Checking Payment...");
 }
+const ORD = {};
 function orderCard(o, token) {
+  ORD[o.order_id] = { ...o, token };
   const paid = o.payment_status === "Paid", idx = paid ? 4 : 0;
-  return `<div class="rv" style="margin-bottom:14px"><b>Order #${o.order_number}</b> · ${money(o.amount)} · <span class="mu">${new Date(o.created_at).toLocaleDateString()}</span>
+  return `<div class="rv" id="oc-${o.order_id}" style="margin-bottom:14px"><b>Order #${o.order_number}</b> · ${money(o.amount)} · <span class="mu">${new Date(o.created_at).toLocaleDateString()}</span>
   <p class="mu">${o.items.map(i => esc(i.title)).join(", ")}</p>
   <div class="steps">${(o.payment_status === "Cancelled" ? ["Cancelled"] : STEPS).map((s, i) => `<span class="${i <= idx ? "d" : ""}">${s}</span>`).join("")}</div>
   <p>Payment: <b>${o.payment_status}</b> · Status: ${esc(o.order_status)}</p>
-  ${paid ? `<p style="color:#2f7d4f"><b>Payment Successful</b></p>` + o.items.map(i => `<button class="btn sm" data-gd="${o.order_id}|${token}|${i.book_id}">Download Book — ${esc(i.title)}</button> `).join("") : o.payment_status === "Pending" ? `<p class="mu">Payment is pending verification</p>` : ""}</div>`;
+  ${paid ? `<p style="color:#2f7d4f"><b>Payment Successful</b></p>` + o.items.map(i => `<button class="btn sm" data-gd="${o.order_id}|${token}|${i.book_id}">Download Book — ${esc(i.title)}</button> `).join("") : o.payment_status === "Pending" ? `<p class="mu">Payment is pending verification</p><div class="ordbtns"><button class="btn sm" data-pay="${o.order_id}">Pay Now</button><button class="btn sm ghost" data-ck="${o.order_id}">Check Payment</button></div>` : ""}</div>`;
 }
 async function loadOrders() {
   const box = $("#ordList"), list = ls("kg_orders", []);
@@ -257,12 +259,14 @@ async function visitor() {
 
 // ===== GLOBAL CLICKS & ROUTING =====
 document.addEventListener("click", e => {
-  const d = e.target.closest("[data-d],[data-add],[data-dl],[data-pv],[data-rv],[data-q],[data-rm],[data-co],[data-gd]"); if (!d) return; const D = d.dataset;
+  const d = e.target.closest("[data-d],[data-add],[data-dl],[data-pv],[data-rv],[data-q],[data-rm],[data-co],[data-gd],[data-pay],[data-ck]"); if (!d) return; const D = d.dataset;
   if (D.d) showBook(D.d); else if (D.add) addCart(D.add); else if (D.dl) freeDownload(D.dl); else if (D.pv) previewPdf(D.pv);
   else if (D.rv) submitReview(D.rv, d);
   else if (D.q) { const [id, n] = D.q.split(":"), c = cart.find(x => x.id === id); c.qty += +n; if (c.qty < 1) cart = cart.filter(x => x !== c); saveCart(); showCart(); }
   else if (D.rm) { cart = cart.filter(x => x.id !== D.rm); saveCart(); showCart(); }
   else if (D.co) showCheckout();
+  else if (D.pay) { const o = ORD[D.pay]; if (o) showPay({ order_id:o.order_id, order_number:o.order_number, amount:o.amount, token:o.token }); }
+  else if (D.ck) { const o = ORD[D.ck]; if (o) refreshOrder(o.order_id, o.token, d).then(r => { if (r) $("#oc-" + o.order_id).outerHTML = orderCard(r, o.token); }); }
   else if (D.gd) { const [a, b, c] = D.gd.split("|"); getDownload(a, b, c, d); }
 });
 function route() { const h = location.hash; $("#v-home").classList.toggle("on", h !== "#orders"); $("#v-orders").classList.toggle("on", h === "#orders"); if (h === "#orders") loadOrders(); }
