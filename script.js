@@ -2,7 +2,6 @@
 const SUPABASE_URL = "https://icwohahcsmobtloevjkf.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imljd29oYWhjc21vYnRsb2V2amtmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4OTQ0NTYsImV4cCI6MjEwNjQ3MDQ1Nn0.KlNrRRKPfTt7XxdlX7i7U_U4r1FwsLeU2pu4YzAirN0";
 
-
 const sb = SUPABASE_URL.startsWith("http") ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 const $ = s => document.querySelector(s);
@@ -347,8 +346,9 @@ function enhanceAuth(root) {
   root.onkeydown = e => { if (e.key === "Enter" && e.target.tagName === "INPUT") root.querySelector(".btn")?.click(); };
 }
 function initAuth() {
+  $("#wGuest").onclick = () => { sessionStorage.setItem("kg_guest", "1"); hideWelcome(); };
   const hasToken = Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k));
-  if (sb && !hasToken) showWelcome(); // login is required: the site opens only after sign in
+  if (sb && !hasToken && !sessionStorage.getItem("kg_guest")) showWelcome();
   $("#aBtn").onclick = e => { e.stopPropagation(); user ? $("#aMenu").classList.toggle("on") : authModal("in"); };
   document.addEventListener("click", () => $("#aMenu").classList.remove("on"));
   if (!sb) { authReady = true; updateAcct(); route(); return; }
@@ -356,9 +356,10 @@ function initAuth() {
     const had = !!user; // never call Supabase inside this callback directly: defer it
     setTimeout(async () => {
       await loadProfile(); updateAcct(); authReady = true;
+      if (ev === "SIGNED_OUT") sessionStorage.removeItem("kg_guest");
       if (ev === "PASSWORD_RECOVERY") { hideWelcome(); authModal("reset"); }
       else if (user) hideWelcome();
-      else showWelcome();
+      else if (!sessionStorage.getItem("kg_guest") && !$("#admin").classList.contains("on")) showWelcome();
       if (ev === "SIGNED_OUT") { Object.keys(ORD).forEach(k => delete ORD[k]); ["#ordList", "#profWrap", "#myBooks"].forEach(s => $(s).innerHTML = ""); closeOv(); if (had && !manualOut) toast("Session expired. Please sign in again."); }
       route();
     }, 0);
