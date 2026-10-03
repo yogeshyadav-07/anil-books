@@ -2,6 +2,7 @@
 const SUPABASE_URL = "https://icwohahcsmobtloevjkf.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imljd29oYWhjc21vYnRsb2V2amtmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4OTQ0NTYsImV4cCI6MjEwNjQ3MDQ1Nn0.KlNrRRKPfTt7XxdlX7i7U_U4r1FwsLeU2pu4YzAirN0";
 
+
 const sb = SUPABASE_URL.startsWith("http") ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 const $ = s => document.querySelector(s);
@@ -20,12 +21,14 @@ async function safe(fn, btn, label) { // runs async work with try/catch, button 
 const T = { en:{home:"Home",books:"Books",about:"About",contact:"Contact",orders:"My Orders",explore:"Explore Books",browse:"Browse Books",browseSub:"Free reads and paid editions, all in one place.",soon:"Coming Soon",soonSub:"Stories on their way to your shelf.",author:"About the Author",reviews:"Reader Reviews",reviewsSub:"What readers are saying.",contactT:"Write to us",contactSub:"Questions, feedback or a book request? We read every message.",send:"Send Message",search:"Search books, authors, stories...",name:"Name",email:"Email",phone:"Phone",message:"Message",all:"All",free:"Free Books",paid:"Paid Books",details:"View Details",download:"Download",cart:"Add to Cart",cartT:"Your Cart",empty:"Your cart is empty.",checkout:"Checkout",none:"No books found. Try another search.",sent:"Your message has been sent successfully.",total:"Total"},
 hi:{home:"होम",books:"किताबें",about:"परिचय",contact:"संपर्क",orders:"मेरे ऑर्डर",explore:"किताबें देखें",browse:"किताबें खोजें",browseSub:"मुफ़्त और सशुल्क किताबें, एक ही जगह।",soon:"जल्द आ रही हैं",soonSub:"जल्द ही आपकी अलमारी में।",author:"लेखक के बारे में",reviews:"पाठकों की राय",reviewsSub:"पाठक क्या कह रहे हैं।",contactT:"हमें लिखें",contactSub:"सवाल, सुझाव या किताब का अनुरोध? हम हर संदेश पढ़ते हैं।",send:"संदेश भेजें",search:"किताबें, लेखक, कहानियाँ खोजें...",name:"नाम",email:"ईमेल",phone:"फ़ोन",message:"संदेश",all:"सभी",free:"मुफ़्त किताबें",paid:"सशुल्क किताबें",details:"विवरण देखें",download:"डाउनलोड",cart:"कार्ट में जोड़ें",cartT:"आपका कार्ट",empty:"आपका कार्ट खाली है।",checkout:"चेकआउट",none:"कोई किताब नहीं मिली। दूसरा शब्द आज़माएँ।",sent:"आपका संदेश सफलतापूर्वक भेज दिया गया है।",total:"कुल"}};
 let lang = ls("kg_lang", "en");
+Object.assign(T.en,{signin:"Sign In",create:"Create Account",hi:"Hi"}); Object.assign(T.hi,{signin:"साइन इन",create:"खाता बनाएँ",hi:"नमस्ते"});
 const t = k => T[lang][k] || T.en[k] || k;
 function applyLang() {
   document.querySelectorAll("[data-i]").forEach(e => e.textContent = t(e.dataset.i));
   document.querySelectorAll("[data-p]").forEach(e => e.placeholder = t(e.dataset.p));
   $("#lBtn").textContent = lang === "en" ? "हिंदी" : "English"; document.documentElement.lang = lang;
   if (S.books.length) { renderTabs(); renderBooks(); renderSoon(); }
+  if (typeof updateAcct === "function") updateAcct();
 }
 
 // ===== THEME =====
@@ -180,6 +183,7 @@ $("#cBtn").onclick = showCart; saveCart();
 // ===== CHECKOUT & PAYMENT FLOW =====
 function showCheckout() {
   openOv(`<h2>${t("checkout")}</h2><label>Full Name</label><input id="kn"><label>Phone</label><input id="kp" inputmode="tel"><label>Email</label><input id="ke" type="email"><button class="btn" id="kGo">Place Order</button>`);
+  $("#kn").value = prof?.full_name || ""; $("#kp").value = prof?.phone || ""; $("#ke").value = user?.email || "";
   $("#kGo").onclick = e => placeOrder(e.target);
 }
 async function placeOrder(btn) {
@@ -191,8 +195,8 @@ async function placeOrder(btn) {
     if (!sb) throw new Error("Connect Supabase to place orders.");
     if (S.demo) throw new Error("Books are not loaded from Supabase yet. Run supabase.sql, then refresh.");
     const items = cart.map(c => ({ book_id:c.id, quantity:c.qty }));
-    const { data, error } = await sb.rpc("place_order", { p_name:n, p_phone:p, p_email:em, p_items:items }); if (error) throw error;
-    const list = ls("kg_orders", []); list.unshift({ id:data.order_id, token:data.token }); save("kg_orders", list);
+    const { data, error } = await sb.rpc("place_order", { p_name:n, p_phone:p, p_email:em, p_items:items });
+    if (error) { if (/sign in/i.test(error.message)) { pendingCheckout = true; authModal("in"); throw new Error("Please sign in or create an account to continue checkout."); } throw error; }
     cart = []; saveCart(); showPay(data);
   }, btn, "Processing...");
 }
@@ -209,35 +213,156 @@ function showPay(o) {
 
 // ===== MY ORDERS =====
 const STEPS = ["Payment Pending", "Payment Verified", "Order Confirmed", "Book Ready", "Download Available"];
+const ORD = {};
 async function refreshOrder(id, token, btn) {
   return await safe(async () => {
     if (!sb) throw new Error("Connect Supabase first.");
-    const { data, error } = await sb.rpc("order_status", { p_order_id:id, p_token:token }); if (error) throw error;
+    const { data, error } = await sb.rpc("order_status", { p_order_id:id, p_token:token || "" }); if (error) throw error;
     if (!data) throw new Error("Order not found."); if (data.payment_status === "Pending") toast("Payment is pending verification"); return data;
   }, btn, "Checking Payment...");
 }
-const ORD = {};
 function orderCard(o, token) {
   ORD[o.order_id] = { ...o, token };
-  const paid = o.payment_status === "Paid", idx = paid ? 4 : 0;
-  return `<div class="rv" id="oc-${o.order_id}" style="margin-bottom:14px"><b>Order #${o.order_number}</b> · ${money(o.amount)} · <span class="mu">${new Date(o.created_at).toLocaleDateString()}</span>
-  <p class="mu">${o.items.map(i => esc(i.title)).join(", ")}</p>
-  <div class="steps">${(o.payment_status === "Cancelled" ? ["Cancelled"] : STEPS).map((s, i) => `<span class="${i <= idx ? "d" : ""}">${s}</span>`).join("")}</div>
+  const paid = o.payment_status === "Paid", cancelled = o.payment_status === "Cancelled", idx = paid ? 4 : 0;
+  const items = o.items.map(i => `<div class="oi">${i.cover_url ? `<img src="${esc(i.cover_url)}" alt="">` : ""}<span>${esc(i.icon || "")} ${esc(i.title)} × ${i.quantity} · ${money(i.price)}</span></div>`).join("");
+  return `<div class="rv" id="oc-${o.order_id}" style="margin-bottom:14px"><b>Order #${o.order_number}</b> · ${money(o.amount)} · <span class="mu">${new Date(o.created_at).toLocaleDateString()}</span>${items}
+  <div class="steps">${(cancelled ? ["Cancelled"] : STEPS).map((s, i) => `<span class="${i <= idx ? "d" : ""}">${s}</span>`).join("")}</div>
   <p>Payment: <b>${o.payment_status}</b> · Status: ${esc(o.order_status)}</p>
-  ${paid ? `<p style="color:#2f7d4f"><b>Payment Successful</b></p>` + o.items.map(i => `<button class="btn sm" data-gd="${o.order_id}|${token}|${i.book_id}">Download Book — ${esc(i.title)}</button> `).join("") : o.payment_status === "Pending" ? `<p class="mu">Payment is pending verification</p><div class="ordbtns"><button class="btn sm" data-pay="${o.order_id}">Pay Now</button><button class="btn sm ghost" data-ck="${o.order_id}">Check Payment</button></div>` : ""}</div>`;
+  ${paid ? `<p style="color:#2f7d4f"><b>Payment Successful</b><br><span class="mu">Your book is ready.</span></p><div class="ordbtns">` + o.items.map(i => `<button class="btn sm" data-gd="${o.order_id}||${i.book_id}">Download Book — ${esc(i.title)}</button>`).join("") + `</div>`
+   : cancelled ? `<p><b>Order Cancelled</b></p>`
+   : `<p class="mu"><b>Payment Pending</b> — waiting for payment verification.</p><div class="ordbtns"><button class="btn sm" data-pay="${o.order_id}">Pay Now</button><button class="btn sm ghost" data-ck="${o.order_id}">Check Payment</button></div>`}</div>`;
 }
+const needLogin = what => `<p class="mu">Please sign in to see ${what}.</p><button class="btn" data-auth="in">Sign In</button>`;
+async function myOrders() { const { data, error } = await sb.rpc("my_orders"); if (error) throw error; return data || []; }
 async function loadOrders() {
-  const box = $("#ordList"), list = ls("kg_orders", []);
-  if (!list.length) { box.innerHTML = "<p class='mu'>No orders yet.</p>"; return; }
-  box.innerHTML = "Loading Orders...";
-  const out = []; for (const x of list) { try { const { data } = await sb.rpc("order_status", { p_order_id:x.id, p_token:x.token }); if (data) out.push(orderCard(data, x.token) ); } catch {} }
-  box.innerHTML = out.join("") || "<p class='mu'>No orders found.</p>";
+  const box = $("#ordList"); if (!user) { box.innerHTML = needLogin("your orders"); return; }
+  box.textContent = "Loading Orders...";
+  try { const list = await myOrders(); box.innerHTML = list.map(o => orderCard(o, "")).join("") || "<p class='mu'>No orders yet.</p>"; }
+  catch (e) { console.error(e); box.innerHTML = "<p>Something went wrong.</p>"; }
 }
-async function getDownload(id, token, bookId, btn) {
+// Secure download: the Edge Function checks the signed-in owner + Paid status + book in order.
+async function getDownload(id, bookId, btn) {
   await safe(async () => {
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/get-download`, { method:"POST", headers:{ "Content-Type":"application/json", apikey:SUPABASE_ANON_KEY, Authorization:"Bearer " + SUPABASE_ANON_KEY }, body:JSON.stringify({ order_id:id, token, book_id:bookId }) });
+    const { data: { session } } = await sb.auth.getSession(); if (!session) throw new Error("Please sign in first.");
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/get-download`, { method:"POST", headers:{ "Content-Type":"application/json", apikey:SUPABASE_ANON_KEY, Authorization:"Bearer " + session.access_token }, body:JSON.stringify({ order_id:id, book_id:bookId }) });
     const d = await r.json(); if (!r.ok) throw new Error(d.error || "Something went wrong."); window.open(d.url, "_blank");
   }, btn, "Processing...");
+}
+
+// ===== USER ACCOUNT (Supabase Auth) =====
+let user = null, prof = null, authReady = false, pendingCheckout = false, manualOut = false;
+function authErr(e) {
+  const m = (e?.message || "").toLowerCase();
+  if (m.includes("invalid login")) return "Invalid email or password.";
+  if (m.includes("already")) return "This email is already registered.";
+  if (m.includes("at least") || m.includes("weak")) return "Password must be at least 6 characters.";
+  if (m.includes("not confirmed")) return "Please verify your email.";
+  if (m.includes("fetch") || m.includes("network")) return "Network error. Please try again.";
+  if (m.includes("rate") || m.includes("seconds")) return "Too many attempts. Please wait a minute.";
+  return "Something went wrong. Please try again.";
+}
+async function loadProfile() {
+  const { data: { session } } = await sb.auth.getSession(); user = session?.user || null; prof = null;
+  if (user) { const { data } = await sb.from("profiles").select("*").eq("id", user.id).maybeSingle(); prof = data; }
+}
+function updateAcct() {
+  const first = (prof?.full_name || user?.email || "").split(/[ @]/)[0];
+  const menu = $("#aMenu"), nav = $("#navAcct"); if (!menu) return;
+  if (user) {
+    const items = `<a href="#orders">${t("orders")}</a><a href="#profile">My Profile</a><button data-lo="1">Logout</button>`;
+    $("#aBtn").textContent = `${t("hi")}, ${first} 👋`; menu.innerHTML = items; nav.innerHTML = `<b>${t("hi")}, ${esc(first)} 👋</b>` + items;
+  } else {
+    $("#aBtn").textContent = t("signin"); menu.innerHTML = "";
+    nav.innerHTML = `<button class="btn sm" data-auth="in">${t("signin")}</button><button class="btn sm ghost" data-auth="up">${t("create")}</button>`;
+  }
+  menu.classList.remove("on");
+}
+function authModal(mode = "in") {
+  if (!sb) return toast("Connect Supabase to use accounts.");
+  const tabs = `<div class="tabs"><button class="tab ${mode === "up" ? "" : "on"}" data-auth="in">Sign In</button><button class="tab ${mode === "up" ? "on" : ""}" data-auth="up">Create Account</button></div>`;
+  const pw = (id, l, ac) => `<label>${l}</label><input id="${id}" type="password" autocomplete="${ac}">`;
+  const H = {
+    in: `<h2>Welcome Back 👋</h2>${tabs}<label>Email</label><input id="lgE" type="email" autocomplete="email">${pw("lgP", "Password", "current-password")}<button class="btn" id="goIn">Sign In</button><p class="mu" style="margin-top:12px"><a href="#" data-auth="forgot">Forgot Password?</a></p><p class="mu">Don't have an account? <a href="#" data-auth="up">Create Account</a></p>`,
+    up: `<h2>Create your KitabGhar account</h2>${tabs}<label>Full Name</label><input id="suN" autocomplete="name"><label>Email</label><input id="suE" type="email" autocomplete="email"><label>Phone</label><input id="suPh" inputmode="tel" autocomplete="tel">${pw("suP", "Password", "new-password")}${pw("suC", "Confirm Password", "new-password")}<button class="btn" id="goUp">Create Account</button><p class="mu" style="margin-top:12px">Already have an account? <a href="#" data-auth="in">Sign In</a></p>`,
+    forgot: `<h2>Forgot Password</h2><p class="sub">We will email you a reset link.</p><label>Email</label><input id="fgE" type="email"><button class="btn" id="goFg">Send Reset Link</button> <button class="btn ghost" data-auth="in">Back</button>`,
+    reset: `<h2>Set a new password</h2>${pw("rsP", "New Password", "new-password")}${pw("rsC", "Confirm Password", "new-password")}<button class="btn" id="goRs">Update Password</button>`
+  };
+  const wc = $("#welcome").classList.contains("on"); if (wc) $("#wcForm").innerHTML = H[mode]; else openOv(H[mode]);
+  enhanceAuth(wc ? $("#wcForm") : $("#ovB")); const on = (id, f) => { const e = $(id); if (e) e.onclick = ev => f(ev.target); };
+  on("#goIn", signIn); on("#goUp", signUp); on("#goFg", sendReset); on("#goRs", setNewPassword);
+}
+async function afterAuth(msg) {
+  await loadProfile(); updateAcct(); closeOv(); hideWelcome(); toast(msg);
+  if (pendingCheckout) { pendingCheckout = false; if (cart.length) showCheckout(); }
+}
+const okEmail = e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+async function signIn(btn) {
+  const email = $("#lgE").value.trim(), pass = $("#lgP").value;
+  if (!okEmail(email)) return toast("Please enter your email"); if (!pass) return toast("Please enter your password.");
+  await safe(async () => { const { error } = await sb.auth.signInWithPassword({ email, password:pass }); if (error) throw new Error(authErr(error)); await afterAuth("Welcome back!"); }, btn, "Processing...");
+}
+async function signUp(btn) {
+  const full_name = $("#suN").value.trim(), email = $("#suE").value.trim(), phone = $("#suPh").value.trim(), pass = $("#suP").value;
+  if (full_name.length < 2) return toast("Please enter your full name."); if (!okEmail(email)) return toast("Please enter your email");
+  if (!/^[0-9+\s-]{10,15}$/.test(phone)) return toast("Please enter a valid phone number.");
+  if (pass.length < 6) return toast("Password must be at least 6 characters."); if (pass !== $("#suC").value) return toast("Passwords do not match.");
+  await safe(async () => {
+    const { data, error } = await sb.auth.signUp({ email, password:pass, options:{ data:{ full_name, phone } } }); if (error) throw new Error(authErr(error));
+    if (data.user && data.user.identities?.length === 0) throw new Error("This email is already registered.");
+    if (data.session) await afterAuth("Account created. Welcome 👋"); else { toast("Account created. Please verify your email, then sign in."); authModal("in"); }
+  }, btn, "Processing...");
+}
+async function sendReset(btn) {
+  const email = $("#fgE").value.trim(); if (!okEmail(email)) return toast("Please enter your email");
+  await safe(async () => { const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname }); if (error) throw new Error(authErr(error)); toast("Password reset email sent."); authModal("in"); }, btn, "Processing...");
+}
+async function setNewPassword(btn) {
+  const p = $("#rsP").value; if (p.length < 6) return toast("Password must be at least 6 characters."); if (p !== $("#rsC").value) return toast("Passwords do not match.");
+  await safe(async () => { const { error } = await sb.auth.updateUser({ password:p }); if (error) throw new Error(authErr(error)); closeOv(); toast("Password updated successfully."); }, btn, "Processing...");
+}
+async function logout() { manualOut = true; try { await sb.auth.signOut(); } catch { toast("Network error. Please try again."); } manualOut = false; toast("Logged out"); location.hash = "#home"; }
+async function renderProfile() {
+  const box = $("#profWrap"), mb = $("#myBooks");
+  if (!user) { box.innerHTML = needLogin("your profile"); mb.innerHTML = ""; return; }
+  box.innerHTML = `<div class="fgrid"><div><label>Full Name</label><input id="pfN" value="${esc(prof?.full_name)}"></div><div><label>Email</label><input value="${esc(user.email)}" disabled></div><div><label>Phone</label><input id="pfP" value="${esc(prof?.phone)}"></div><div><label>Account Created</label><input value="${new Date(user.created_at).toLocaleDateString()}" disabled></div></div><button class="btn" data-ps="1">Save Changes</button>`;
+  mb.textContent = "Loading Books...";
+  try { // My Books = items from this user's Paid orders (no separate ownership table)
+    const seen = {}; (await myOrders()).filter(o => o.payment_status === "Paid").forEach(o => o.items.forEach(i => { if (!seen[i.book_id]) seen[i.book_id] = { ...i, oid:o.order_id, at:o.created_at }; }));
+    mb.innerHTML = Object.values(seen).map(i => `<div class="rv oi" style="margin-bottom:10px;justify-content:space-between"><span>${esc(i.icon || "📕")} <b>${esc(i.title)}</b><br><span class="mu">Purchased: ${new Date(i.at).toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"numeric" })}</span></span><button class="btn sm" data-gd="${i.oid}||${i.book_id}">Download</button></div>`).join("") || "<p class='mu'>No purchased books yet.</p>";
+  } catch (e) { mb.innerHTML = "<p>Something went wrong.</p>"; }
+}
+async function saveProfile(btn) {
+  const full_name = $("#pfN").value.trim(), phone = $("#pfP").value.trim(); if (full_name.length < 2) return toast("Please enter your full name.");
+  await safe(async () => { const { error } = await sb.from("profiles").update({ full_name, phone }).eq("id", user.id); if (error) throw error; await loadProfile(); updateAcct(); toast("Profile updated successfully"); }, btn, "Processing...");
+}
+// ----- Welcome page (shown to visitors who are not signed in) -----
+const showWelcome = () => { if (!sb) return; $("#welcome").classList.add("on"); document.body.style.overflow = "hidden"; if (!$("#wcForm").innerHTML) authModal("in"); };
+const hideWelcome = () => { $("#welcome").classList.remove("on"); document.body.style.overflow = ""; };
+function enhanceAuth(root) {
+  root.querySelectorAll("input[type=password]").forEach(i => { const w = document.createElement("div"); w.className = "pwf"; i.parentNode.insertBefore(w, i); w.appendChild(i);
+    const b = document.createElement("button"); b.type = "button"; b.className = "eye"; b.textContent = "👁"; b.setAttribute("aria-label", "Show password"); b.onclick = () => { i.type = i.type === "password" ? "text" : "password"; }; w.appendChild(b); });
+  const p = root.querySelector("#suP");
+  if (p) { const m = document.createElement("div"); m.className = "meter"; m.innerHTML = "<i></i>"; p.closest(".pwf").after(m);
+    p.oninput = () => { const v = p.value, s = (v.length >= 6) + (v.length >= 10) + /[A-Z]/.test(v) + /\d/.test(v) + /[^\w]/.test(v); m.firstChild.style.width = s * 20 + "%"; m.firstChild.style.background = s < 2 ? "#c0392b" : s < 4 ? "#e0a030" : "#2f7d4f"; }; }
+  root.onkeydown = e => { if (e.key === "Enter" && e.target.tagName === "INPUT") root.querySelector(".btn")?.click(); };
+}
+function initAuth() {
+  const hasToken = Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k));
+  if (sb && !hasToken) showWelcome(); // login is required: the site opens only after sign in
+  $("#aBtn").onclick = e => { e.stopPropagation(); user ? $("#aMenu").classList.toggle("on") : authModal("in"); };
+  document.addEventListener("click", () => $("#aMenu").classList.remove("on"));
+  if (!sb) { authReady = true; updateAcct(); route(); return; }
+  sb.auth.onAuthStateChange((ev, session) => {
+    const had = !!user; // never call Supabase inside this callback directly: defer it
+    setTimeout(async () => {
+      await loadProfile(); updateAcct(); authReady = true;
+      if (ev === "PASSWORD_RECOVERY") { hideWelcome(); authModal("reset"); }
+      else if (user) hideWelcome();
+      else showWelcome();
+      if (ev === "SIGNED_OUT") { Object.keys(ORD).forEach(k => delete ORD[k]); ["#ordList", "#profWrap", "#myBooks"].forEach(s => $(s).innerHTML = ""); closeOv(); if (had && !manualOut) toast("Session expired. Please sign in again."); }
+      route();
+    }, 0);
+  });
 }
 
 // ===== CONTACT =====
@@ -259,19 +384,25 @@ async function visitor() {
 
 // ===== GLOBAL CLICKS & ROUTING =====
 document.addEventListener("click", e => {
-  const d = e.target.closest("[data-d],[data-add],[data-dl],[data-pv],[data-rv],[data-q],[data-rm],[data-co],[data-gd],[data-pay],[data-ck]"); if (!d) return; const D = d.dataset;
-  if (D.d) showBook(D.d); else if (D.add) addCart(D.add); else if (D.dl) freeDownload(D.dl); else if (D.pv) previewPdf(D.pv);
+  const d = e.target.closest("[data-d],[data-add],[data-dl],[data-pv],[data-rv],[data-q],[data-rm],[data-co],[data-gd],[data-pay],[data-ck],[data-auth],[data-lo],[data-ps]"); if (!d) return; const D = d.dataset;
+  if (d.tagName === "A") e.preventDefault();
+  if (D.auth) authModal(D.auth); else if (D.lo) logout(); else if (D.ps) saveProfile(d);
+  else if (D.d) showBook(D.d); else if (D.add) addCart(D.add); else if (D.dl) freeDownload(D.dl); else if (D.pv) previewPdf(D.pv);
   else if (D.rv) submitReview(D.rv, d);
   else if (D.q) { const [id, n] = D.q.split(":"), c = cart.find(x => x.id === id); c.qty += +n; if (c.qty < 1) cart = cart.filter(x => x !== c); saveCart(); showCart(); }
   else if (D.rm) { cart = cart.filter(x => x.id !== D.rm); saveCart(); showCart(); }
-  else if (D.co) showCheckout();
+  else if (D.co) { if (!user) { toast("Please sign in or create an account to continue checkout."); pendingCheckout = true; authModal("in"); } else showCheckout(); }
   else if (D.pay) { const o = ORD[D.pay]; if (o) showPay({ order_id:o.order_id, order_number:o.order_number, amount:o.amount, token:o.token }); }
   else if (D.ck) { const o = ORD[D.ck]; if (o) refreshOrder(o.order_id, o.token, d).then(r => { if (r) $("#oc-" + o.order_id).outerHTML = orderCard(r, o.token); }); }
-  else if (D.gd) { const [a, b, c] = D.gd.split("|"); getDownload(a, b, c, d); }
+  else if (D.gd) { const [a, , c] = D.gd.split("|"); getDownload(a, c, d); }
 });
-function route() { const h = location.hash; $("#v-home").classList.toggle("on", h !== "#orders"); $("#v-orders").classList.toggle("on", h === "#orders"); if (h === "#orders") loadOrders(); }
+function route() {
+  const h = location.hash, v = h === "#orders" ? "orders" : h === "#profile" ? "profile" : "home";
+  ["home", "orders", "profile"].forEach(x => $("#v-" + x).classList.toggle("on", x === v));
+  if (v === "home" || !authReady) return; v === "orders" ? loadOrders() : renderProfile();
+}
 window.addEventListener("hashchange", route); route();
-loadAll(); visitor();
+initAuth(); loadAll(); visitor();
 
 // ===== ADMIN AUTH =====
 let adminTab = "dash", editing = null;
@@ -293,15 +424,17 @@ function loginForm() {
 }
 async function checkAdmin() {
   const { data: u } = await sb.auth.getUser(); const { data } = await sb.from("profiles").select("role").eq("id", u.user.id).maybeSingle();
-  if (data?.role !== "admin") { await sb.auth.signOut(); toast("You are not authorized"); return loginForm(); }
+  if (data?.role !== "admin") { toast("You are not authorized"); return loginForm(); }
   renderAdmin();
 }
 async function renderAdmin() { adminShell("<p>Loading...</p>"); await safe(async () => { const fn = { dash:aDash, books:aBooks, soon:aSoon, pay:aPay, msg:aMsg, set:aSet }[adminTab]; $("#am").innerHTML = await fn(); bindAdmin(); }); }
 const cnt = async (t, f) => { let q = sb.from(t).select("*", { count:"exact", head:true }); if (f) q = f(q); return (await q).count ?? 0; };
 async function aDash() {
   const v = await sb.from("visitor_stats").select("total").single();
-  const s = [["Total Books", await cnt("books")], ["Free Books", await cnt("books", q => q.eq("category","free"))], ["Paid Books", await cnt("books", q => q.eq("category","paid"))], ["Coming Soon Books", await cnt("coming_books")], ["Total Orders", await cnt("orders")], ["Pending Payments", await cnt("orders", q => q.eq("payment_status","Pending"))], ["Paid Orders", await cnt("orders", q => q.eq("payment_status","Paid"))], ["Total Visitors", v.data?.total ?? 0], ["Contact Messages", await cnt("contact_messages")]];
-  return `<h2>Dashboard</h2><div class="stats" style="margin-top:16px">${s.map(([l, n]) => `<div class="stat"><b>${n}</b>${l}</div>`).join("")}</div>`;
+  const s = [["Total Books", await cnt("books")], ["Free Books", await cnt("books", q => q.eq("category","free"))], ["Paid Books", await cnt("books", q => q.eq("category","paid"))], ["Coming Soon Books", await cnt("coming_books")], ["Total Orders", await cnt("orders")], ["Pending Payments", await cnt("orders", q => q.eq("payment_status","Pending"))], ["Paid Orders", await cnt("orders", q => q.eq("payment_status","Paid"))], ["Total Visitors", v.data?.total ?? 0], ["Contact Messages", await cnt("contact_messages")], ["Total Users", await cnt("profiles")]];
+  const us = (await sb.from("profiles").select("full_name,email,phone,role,created_at").order("created_at", { ascending:false }).limit(50)).data || [];
+  return `<h2>Dashboard</h2><div class="stats" style="margin-top:16px">${s.map(([l, n]) => `<div class="stat"><b>${n}</b>${l}</div>`).join("")}</div>
+  <h3 style="margin:26px 0 10px">Users</h3><div class="tw"><table><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Joined</th></tr>${us.map(u => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.email)}</td><td>${esc(u.phone)}</td><td>${esc(u.role)}</td><td>${new Date(u.created_at).toLocaleDateString()}</td></tr>`).join("") || "<tr><td>No users yet.</td></tr>"}</table></div>`;
 }
 
 // ===== STORAGE =====
@@ -379,7 +512,9 @@ async function setPay(id, st) {
 // ===== ADMIN CONTACT & SETTINGS =====
 async function aMsg() {
   const { data, error } = await sb.from("contact_messages").select("*").order("created_at", { ascending:false }); if (error) throw error;
-  return `<h2>Contact</h2><div class="tw" style="margin-top:14px"><table><tr><th>Name</th><th>Email</th><th>Phone</th><th>Message</th><th>Date</th><th>Status</th></tr>${data.map(m => `<tr><td>${esc(m.name)}</td><td>${esc(m.email)}</td><td>${esc(m.phone)}</td><td>${esc(m.message)}</td><td>${new Date(m.created_at).toLocaleDateString()}</td><td><select data-ms="${m.id}">${["Unread","Read","Resolved"].map(s => `<option ${m.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></td></tr>`).join("") || "<tr><td>No messages yet.</td></tr>"}</table></div>`;
+  const rv = (await sb.from("reviews").select("*, books(title)").order("created_at", { ascending:false }).limit(100)).data || [];
+  return `<h2>Contact</h2><div class="tw" style="margin-top:14px"><table><tr><th>Name</th><th>Email</th><th>Phone</th><th>Message</th><th>Date</th><th>Status</th></tr>${data.map(m => `<tr><td>${esc(m.name)}</td><td>${esc(m.email)}</td><td>${esc(m.phone)}</td><td>${esc(m.message)}</td><td>${new Date(m.created_at).toLocaleDateString()}</td><td><select data-ms="${m.id}">${["Unread","Read","Resolved"].map(s => `<option ${m.status === s ? "selected" : ""}>${s}</option>`).join("")}</select></td></tr>`).join("") || "<tr><td>No messages yet.</td></tr>"}</table></div>
+  <h3 style="margin:26px 0 10px">Reviews</h3><div class="tw"><table><tr><th>Book</th><th>Name</th><th>Rating</th><th>Comment</th><th>Date</th><th></th></tr>${rv.map(r => `<tr><td>${esc(r.books?.title)}</td><td>${esc(r.name)}</td><td>${"★".repeat(r.rating)}</td><td>${esc(r.comment)}</td><td>${new Date(r.created_at).toLocaleDateString()}</td><td><button class="btn sm red" data-rd="${r.id}">🗑️ Delete</button></td></tr>`).join("") || "<tr><td>No reviews yet.</td></tr>"}</table></div>`;
 }
 const SET = [["site_name","Website Name"],["author_name","Author Name"],["about_author","About Author"],["contact_email","Contact Email"],["contact_phone","Contact Phone"],["upi_id","UPI ID"],["hero_heading","Hero Heading"],["hero_description","Hero Description"],["hero_1","Hero Image 1"],["hero_2","Hero Image 2"],["hero_3","Hero Image 3"],["hero_4","Hero Image 4"],["hero_5","Hero Image 5"],["hero_6","Hero Image 6"],["footer_text","Footer Text"],["instagram","Instagram"],["facebook","Facebook"],["youtube","YouTube"],["footer_email","Footer Email"]];
 async function aSet() {
@@ -401,6 +536,7 @@ function bindAdmin() {
   on("#bSave", saveBook); on("#bCancel", () => { editing = null; renderAdmin(); }); on("#sSave", saveSoon); on("#setSave", saveSet);
   m.onclick = ev => { const D = ev.target.dataset; if (D.be) { editing = D.be; renderAdmin(); } else if (D.bd) delBook(D.bd); else if (D.se) { editing = D.se; renderAdmin(); }
     else if (D.sd) { if (confirm("Are you sure you want to delete this?")) sb.from("coming_books").delete().eq("id", D.sd).then(() => { toast("Deleted successfully"); loadAll(); renderAdmin(); }); }
+    else if (D.rd) { if (confirm("Delete this review?")) safe(async () => { const { error } = await sb.from("reviews").delete().eq("id", D.rd); if (error) throw error; toast("Review deleted"); const r = await sb.from("reviews").select("*").order("created_at", { ascending:false }); S.reviews = r.data || []; renderReviews(); renderAdmin(); }); }
     else if (D.pp) { const [i, s] = D.pp.split("|"); setPay(i, s); } };
   m.onchange = async ev => { const D = ev.target.dataset; if (D.ms) await safe(async () => { const { error } = await sb.from("contact_messages").update({ status:ev.target.value }).eq("id", D.ms); if (error) throw error; toast("Status updated"); }); };
 }

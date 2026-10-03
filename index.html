@@ -11,7 +11,8 @@
 <body>
 <header><div class="wrap"><div class="hd">
 <a class="logo" href="#home" id="siteName">KitabGhar</a>
-<nav id="nav"><a href="#home" data-i="home">Home</a><a href="#books" data-i="books">Books</a><a href="#about" data-i="about">About</a><a href="#contact" data-i="contact">Contact</a><a href="#orders" data-i="orders">My Orders</a></nav>
+<nav id="nav"><a href="#home" data-i="home">Home</a><a href="#books" data-i="books">Books</a><a href="#about" data-i="about">About</a><a href="#contact" data-i="contact">Contact</a><a href="#orders" data-i="orders">My Orders</a><div id="navAcct"></div></nav>
+<div class="acw"><button class="ib" id="aBtn">Sign In</button><div class="am" id="aMenu"></div></div>
 <button class="ib" id="sBtn" aria-label="Search">🔍</button>
 <button class="ib" id="cBtn" aria-label="Cart">🛒<span class="badge" id="cBadge">0</span></button>
 <button class="ib" id="lBtn">हिंदी</button>
@@ -41,7 +42,8 @@
 <div><input id="cn" data-p="name" placeholder="Name"><input id="ce" type="email" data-p="email" placeholder="Email"><input id="cp" data-p="phone" placeholder="Phone"><textarea id="cm" rows="4" data-p="message" placeholder="Message"></textarea><button class="btn" id="cSend" data-i="send">Send Message</button></div></div></section>
 </div>
 
-<div class="view" id="v-orders"><section><div class="wrap"><h2 data-i="orders">My Orders</h2><p class="sub">Orders placed on this device.</p><div id="ordList"></div></div></section></div>
+<div class="view" id="v-orders"><section><div class="wrap"><h2 data-i="orders">My Orders</h2><p class="sub">Your orders and payment status.</p><div id="ordList"></div></div></section></div>
+<div class="view" id="v-profile"><section><div class="wrap"><h2>My Profile</h2><div id="profWrap"></div><h2 style="margin-top:36px">My Books</h2><p class="sub">Books from your verified (paid) orders.</p><div id="myBooks"></div></div></section></div>
 </main>
 
 <footer><div class="wrap"><div class="fg">
@@ -54,9 +56,12 @@
 <div class="toast" id="toast"></div>
 <div id="admin"></div>
 
+<div id="welcome"><div class="wl"><div class="fl">
+<img src="https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=400&q=70" alt=""><img src="https://images.unsplash.com/photo-1512820790803-83ca734da794?w=400&q=70" alt=""><img src="https://images.unsplash.com/photo-1589998059171-988d887df646?w=400&q=70" alt=""><img src="https://images.unsplash.com/photo-1543002588-bfa74002ed7e?w=400&q=70" alt=""></div>
+<div class="wt"><h1>Every story finds its reader.</h1><p>Sign in to read free books, buy new releases, and keep every order and download in one place.</p>
+<ul><li>📚 Free books, always open</li><li>🔒 Secure downloads after payment</li><li>🧾 Track every order</li></ul></div></div>
+<div class="wr"><div class="wcard"><div class="logo">KitabGhar</div><div id="wcForm"></div></div></div></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
-
-
