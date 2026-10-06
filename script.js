@@ -262,7 +262,11 @@ function authErr(e) {
 }
 async function loadProfile() {
   const { data: { session } } = await sb.auth.getSession(); user = session?.user || null; prof = null;
-  if (user) { const { data } = await sb.from("profiles").select("*").eq("id", user.id).maybeSingle(); prof = data; }
+  if (user) { // profile columns (name, email, phone) are checked after login; a missing row is created from sign-up data
+    let { data } = await sb.from("profiles").select("*").eq("id", user.id).maybeSingle();
+    if (!data || !data.full_name || !data.phone) { const r = await sb.rpc("ensure_profile"); if (r.data) data = r.data; }
+    prof = data;
+  }
 }
 function updateAcct() {
   const first = (prof?.full_name || user?.email || "").split(/[ @]/)[0];
@@ -346,9 +350,8 @@ function enhanceAuth(root) {
   root.onkeydown = e => { if (e.key === "Enter" && e.target.tagName === "INPUT") root.querySelector(".btn")?.click(); };
 }
 function initAuth() {
-  $("#wGuest").onclick = () => { sessionStorage.setItem("kg_guest", "1"); hideWelcome(); };
   const hasToken = Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k));
-  if (sb && !hasToken && !sessionStorage.getItem("kg_guest")) showWelcome();
+  if (sb && !hasToken) showWelcome(); // login is required: the site opens only after sign in
   $("#aBtn").onclick = e => { e.stopPropagation(); user ? $("#aMenu").classList.toggle("on") : authModal("in"); };
   document.addEventListener("click", () => $("#aMenu").classList.remove("on"));
   if (!sb) { authReady = true; updateAcct(); route(); return; }
@@ -356,10 +359,9 @@ function initAuth() {
     const had = !!user; // never call Supabase inside this callback directly: defer it
     setTimeout(async () => {
       await loadProfile(); updateAcct(); authReady = true;
-      if (ev === "SIGNED_OUT") sessionStorage.removeItem("kg_guest");
       if (ev === "PASSWORD_RECOVERY") { hideWelcome(); authModal("reset"); }
       else if (user) hideWelcome();
-      else if (!sessionStorage.getItem("kg_guest") && !$("#admin").classList.contains("on")) showWelcome();
+      else showWelcome();
       if (ev === "SIGNED_OUT") { Object.keys(ORD).forEach(k => delete ORD[k]); ["#ordList", "#profWrap", "#myBooks"].forEach(s => $(s).innerHTML = ""); closeOv(); if (had && !manualOut) toast("Session expired. Please sign in again."); }
       route();
     }, 0);
