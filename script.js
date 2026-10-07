@@ -194,7 +194,7 @@ async function placeOrder(btn) {
     if (!sb) throw new Error("Connect Supabase to place orders.");
     if (S.demo) throw new Error("Books are not loaded from Supabase yet. Run supabase.sql, then refresh.");
     const items = cart.map(c => ({ book_id:c.id, quantity:c.qty }));
-    const { data, error } = await sb.rpc("place_order", { p_name:n, p_phone:p, p_email:em, p_items:items });
+    const { data, error } = await sb.rpc("place_order", { p_session:sess(), p_name:n, p_phone:p, p_email:em, p_items:items });
     if (error) { if (/sign in/i.test(error.message)) { pendingCheckout = true; authModal("in"); throw new Error("Please sign in or create an account to continue checkout."); } throw error; }
     cart = []; saveCart(); showPay(data);
   }, btn, "Processing...");
@@ -216,7 +216,7 @@ const ORD = {};
 async function refreshOrder(id, token, btn) {
   return await safe(async () => {
     if (!sb) throw new Error("Connect Supabase first.");
-    const { data, error } = await sb.rpc("order_status", { p_order_id:id, p_token:token || "" }); if (error) throw error;
+    const { data, error } = await sb.rpc("my_order_status", { p_session:sess(), p_order_id:id }); if (error) throw error;
     if (!data) throw new Error("Order not found."); if (data.payment_status === "Pending") toast("Payment is pending verification"); return data;
   }, btn, "Checking Payment...");
 }
@@ -232,7 +232,7 @@ function orderCard(o, token) {
    : `<p class="mu"><b>Payment Pending</b> — waiting for payment verification.</p><div class="ordbtns"><button class="btn sm" data-pay="${o.order_id}">Pay Now</button><button class="btn sm ghost" data-ck="${o.order_id}">Check Payment</button></div>`}</div>`;
 }
 const needLogin = what => `<p class="mu">Please sign in to see ${what}.</p><button class="btn" data-auth="in">Sign In</button>`;
-async function myOrders() { const { data, error } = await sb.rpc("my_orders"); if (error) throw error; return data || []; }
+async function myOrders() { const { data, error } = await sb.rpc("my_orders", { p_session:sess() }); if (error) throw error; return data || []; }
 async function loadOrders() {
   const box = $("#ordList"); if (!user) { box.innerHTML = needLogin("your orders"); return; }
   box.textContent = "Loading Orders...";
@@ -242,8 +242,8 @@ async function loadOrders() {
 // Secure download: the Edge Function checks the signed-in owner + Paid status + book in order.
 async function getDownload(id, bookId, btn) {
   await safe(async () => {
-    const { data: { session } } = await sb.auth.getSession(); if (!session) throw new Error("Please sign in first.");
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/get-download`, { method:"POST", headers:{ "Content-Type":"application/json", apikey:SUPABASE_ANON_KEY, Authorization:"Bearer " + session.access_token }, body:JSON.stringify({ order_id:id, book_id:bookId }) });
+    if (!sess()) throw new Error("Please sign in first.");
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/get-download`, { method:"POST", headers:{ "Content-Type":"application/json", apikey:SUPABASE_ANON_KEY, Authorization:"Bearer " + SUPABASE_ANON_KEY }, body:JSON.stringify({ session:sess(), order_id:id, book_id:bookId }) });
     const d = await r.json(); if (!r.ok) throw new Error(d.error || "Something went wrong."); window.open(d.url, "_blank");
   }, btn, "Processing...");
 }
@@ -251,7 +251,9 @@ async function getDownload(id, bookId, btn) {
 // ===== USER ACCOUNT (Supabase Auth) =====
 let user = null, prof = null, authReady = false, pendingCheckout = false, manualOut = false;
 function authErr(e) {
-  const m = (e?.message || "").toLowerCase();
+  if (/^(This email|Invalid email|Too many|Password must|Please enter)/.test(e?.message || "")) return e.message;
+  const m = (e?.message || "").toLowerCase(); console.warn("Auth error:", e?.message);
+  if (m.includes("email rate limit")) return "Too many sign-up emails sent. Please wait about an hour, or ask the owner to turn off email confirmation.";
   if (m.includes("invalid login")) return "Invalid email or password.";
   if (m.includes("already")) return "This email is already registered.";
   if (m.includes("at least") || m.includes("weak")) return "Password must be at least 6 characters.";
@@ -261,13 +263,10 @@ function authErr(e) {
   return "Something went wrong. Please try again.";
 }
 async function loadProfile() {
-  const { data: { session } } = await sb.auth.getSession(); user = session?.user || null; prof = null;
-  if (user) { // profile columns (name, email, phone) are checked after login; a missing row is created from sign-up data
-    let { data } = await sb.from("profiles").select("*").eq("id", user.id).maybeSingle();
-    if (!data || !data.full_name || !data.phone) { const r = await sb.rpc("ensure_profile"); if (r.data) data = r.data; }
-    prof = data;
-  }
+  user = null; prof = null; const s = localStorage.getItem("kg_sess");
+  if (s) { try { const { data } = await sb.rpc("user_me", { p_session:s }); if (data) { user = data; prof = data; } else localStorage.removeItem("kg_sess"); } catch (e) { console.warn(e); } }
 }
+const sess = () => localStorage.getItem("kg_sess") || "";
 function updateAcct() {
   const first = (prof?.full_name || user?.email || "").split(/[ @]/)[0];
   const menu = $("#aMenu"), nav = $("#navAcct"); if (!menu) return;
@@ -287,12 +286,11 @@ function authModal(mode = "in") {
   const H = {
     in: `<h2>Welcome Back 👋</h2>${tabs}<label>Email</label><input id="lgE" type="email" autocomplete="email">${pw("lgP", "Password", "current-password")}<button class="btn" id="goIn">Sign In</button><p class="mu" style="margin-top:12px"><a href="#" data-auth="forgot">Forgot Password?</a></p><p class="mu">Don't have an account? <a href="#" data-auth="up">Create Account</a></p>`,
     up: `<h2>Create your KitabGhar account</h2>${tabs}<label>Full Name</label><input id="suN" autocomplete="name"><label>Email</label><input id="suE" type="email" autocomplete="email"><label>Phone</label><input id="suPh" inputmode="tel" autocomplete="tel">${pw("suP", "Password", "new-password")}${pw("suC", "Confirm Password", "new-password")}<button class="btn" id="goUp">Create Account</button><p class="mu" style="margin-top:12px">Already have an account? <a href="#" data-auth="in">Sign In</a></p>`,
-    forgot: `<h2>Forgot Password</h2><p class="sub">We will email you a reset link.</p><label>Email</label><input id="fgE" type="email"><button class="btn" id="goFg">Send Reset Link</button> <button class="btn ghost" data-auth="in">Back</button>`,
-    reset: `<h2>Set a new password</h2>${pw("rsP", "New Password", "new-password")}${pw("rsC", "Confirm Password", "new-password")}<button class="btn" id="goRs">Update Password</button>`
+    forgot: `<h2>Forgot Password</h2><p class="sub">Please contact us and we will reset your password.</p><p>✉ ${esc(S.set.contact_email || "")}<br>☎ ${esc(S.set.contact_phone || "")}</p><button class="btn ghost" data-auth="in">Back to Sign In</button>`,
   };
   const wc = $("#welcome").classList.contains("on"); if (wc) $("#wcForm").innerHTML = H[mode]; else openOv(H[mode]);
   enhanceAuth(wc ? $("#wcForm") : $("#ovB")); const on = (id, f) => { const e = $(id); if (e) e.onclick = ev => f(ev.target); };
-  on("#goIn", signIn); on("#goUp", signUp); on("#goFg", sendReset); on("#goRs", setNewPassword);
+  on("#goIn", signIn); on("#goUp", signUp); 
 }
 async function afterAuth(msg) {
   await loadProfile(); updateAcct(); closeOv(); hideWelcome(); toast(msg);
@@ -302,7 +300,11 @@ const okEmail = e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
 async function signIn(btn) {
   const email = $("#lgE").value.trim(), pass = $("#lgP").value;
   if (!okEmail(email)) return toast("Please enter your email"); if (!pass) return toast("Please enter your password.");
-  await safe(async () => { const { error } = await sb.auth.signInWithPassword({ email, password:pass }); if (error) throw new Error(authErr(error)); await afterAuth("Welcome back!"); }, btn, "Processing...");
+  await safe(async () => {
+    const { data, error } = await sb.rpc("user_login", { p_email:email, p_password:pass }); if (error) throw new Error(authErr(error));
+    if (data.error) throw new Error(data.error);
+    localStorage.setItem("kg_sess", data.token); await afterAuth("Welcome back!");
+  }, btn, "Processing...");
 }
 async function signUp(btn) {
   const full_name = $("#suN").value.trim(), email = $("#suE").value.trim(), phone = $("#suPh").value.trim(), pass = $("#suP").value;
@@ -310,20 +312,17 @@ async function signUp(btn) {
   if (!/^[0-9+\s-]{10,15}$/.test(phone)) return toast("Please enter a valid phone number.");
   if (pass.length < 6) return toast("Password must be at least 6 characters."); if (pass !== $("#suC").value) return toast("Passwords do not match.");
   await safe(async () => {
-    const { data, error } = await sb.auth.signUp({ email, password:pass, options:{ data:{ full_name, phone } } }); if (error) throw new Error(authErr(error));
-    if (data.user && data.user.identities?.length === 0) throw new Error("This email is already registered.");
-    if (data.session) await afterAuth("Account created. Welcome 👋"); else { toast("Account created. Please verify your email, then sign in."); authModal("in"); }
+    const { data, error } = await sb.rpc("user_signup", { p_name:full_name, p_email:email, p_phone:phone, p_password:pass }); if (error) throw new Error(authErr(error));
+    localStorage.setItem("kg_sess", data.token); await afterAuth("Account created. Welcome 👋");
   }, btn, "Processing...");
 }
-async function sendReset(btn) {
-  const email = $("#fgE").value.trim(); if (!okEmail(email)) return toast("Please enter your email");
-  await safe(async () => { const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname }); if (error) throw new Error(authErr(error)); toast("Password reset email sent."); authModal("in"); }, btn, "Processing...");
+
+
+async function logout() {
+  const s = sess(); localStorage.removeItem("kg_sess"); try { if (s) await sb.rpc("user_logout", { p_session:s }); } catch {}
+  user = null; prof = null; sessionStorage.removeItem("kg_guest"); Object.keys(ORD).forEach(k => delete ORD[k]);
+  ["#ordList", "#profWrap", "#myBooks"].forEach(x => $(x).innerHTML = ""); updateAcct(); closeOv(); toast("Logged out"); location.hash = "#home"; route(); showWelcome();
 }
-async function setNewPassword(btn) {
-  const p = $("#rsP").value; if (p.length < 6) return toast("Password must be at least 6 characters."); if (p !== $("#rsC").value) return toast("Passwords do not match.");
-  await safe(async () => { const { error } = await sb.auth.updateUser({ password:p }); if (error) throw new Error(authErr(error)); closeOv(); toast("Password updated successfully."); }, btn, "Processing...");
-}
-async function logout() { manualOut = true; try { await sb.auth.signOut(); } catch { toast("Network error. Please try again."); } manualOut = false; toast("Logged out"); location.hash = "#home"; }
 async function renderProfile() {
   const box = $("#profWrap"), mb = $("#myBooks");
   if (!user) { box.innerHTML = needLogin("your profile"); mb.innerHTML = ""; return; }
@@ -336,7 +335,7 @@ async function renderProfile() {
 }
 async function saveProfile(btn) {
   const full_name = $("#pfN").value.trim(), phone = $("#pfP").value.trim(); if (full_name.length < 2) return toast("Please enter your full name.");
-  await safe(async () => { const { error } = await sb.from("profiles").update({ full_name, phone }).eq("id", user.id); if (error) throw error; await loadProfile(); updateAcct(); toast("Profile updated successfully"); }, btn, "Processing...");
+  await safe(async () => { const { error } = await sb.rpc("user_update_profile", { p_session:sess(), p_name:full_name, p_phone:phone }); if (error) throw new Error(authErr(error)); await loadProfile(); updateAcct(); toast("Profile updated successfully"); }, btn, "Processing...");
 }
 // ----- Welcome page (shown to visitors who are not signed in) -----
 const showWelcome = () => { if (!sb) return; $("#welcome").classList.add("on"); document.body.style.overflow = "hidden"; if (!$("#wcForm").innerHTML) authModal("in"); };
@@ -350,22 +349,13 @@ function enhanceAuth(root) {
   root.onkeydown = e => { if (e.key === "Enter" && e.target.tagName === "INPUT") root.querySelector(".btn")?.click(); };
 }
 function initAuth() {
-  const hasToken = Object.keys(localStorage).some(k => /^sb-.*-auth-token$/.test(k));
-  if (sb && !hasToken) showWelcome(); // login is required: the site opens only after sign in
+  $("#wGuest").onclick = () => { sessionStorage.setItem("kg_guest", "1"); hideWelcome(); };
   $("#aBtn").onclick = e => { e.stopPropagation(); user ? $("#aMenu").classList.toggle("on") : authModal("in"); };
   document.addEventListener("click", () => $("#aMenu").classList.remove("on"));
   if (!sb) { authReady = true; updateAcct(); route(); return; }
-  sb.auth.onAuthStateChange((ev, session) => {
-    const had = !!user; // never call Supabase inside this callback directly: defer it
-    setTimeout(async () => {
-      await loadProfile(); updateAcct(); authReady = true;
-      if (ev === "PASSWORD_RECOVERY") { hideWelcome(); authModal("reset"); }
-      else if (user) hideWelcome();
-      else showWelcome();
-      if (ev === "SIGNED_OUT") { Object.keys(ORD).forEach(k => delete ORD[k]); ["#ordList", "#profWrap", "#myBooks"].forEach(s => $(s).innerHTML = ""); closeOv(); if (had && !manualOut) toast("Session expired. Please sign in again."); }
-      route();
-    }, 0);
-  });
+  if (!localStorage.getItem("kg_sess") && !sessionStorage.getItem("kg_guest")) showWelcome();
+  (async () => { await loadProfile(); updateAcct(); authReady = true;
+    if (user) hideWelcome(); else if (!sessionStorage.getItem("kg_guest")) showWelcome(); route(); })();
 }
 
 // ===== CONTACT =====
@@ -434,10 +424,10 @@ async function renderAdmin() { adminShell("<p>Loading...</p>"); await safe(async
 const cnt = async (t, f) => { let q = sb.from(t).select("*", { count:"exact", head:true }); if (f) q = f(q); return (await q).count ?? 0; };
 async function aDash() {
   const v = await sb.from("visitor_stats").select("total").single();
-  const s = [["Total Books", await cnt("books")], ["Free Books", await cnt("books", q => q.eq("category","free"))], ["Paid Books", await cnt("books", q => q.eq("category","paid"))], ["Coming Soon Books", await cnt("coming_books")], ["Total Orders", await cnt("orders")], ["Pending Payments", await cnt("orders", q => q.eq("payment_status","Pending"))], ["Paid Orders", await cnt("orders", q => q.eq("payment_status","Paid"))], ["Total Visitors", v.data?.total ?? 0], ["Contact Messages", await cnt("contact_messages")], ["Total Users", await cnt("profiles")]];
-  const us = (await sb.from("profiles").select("full_name,email,phone,role,created_at").order("created_at", { ascending:false }).limit(50)).data || [];
+  const s = [["Total Books", await cnt("books")], ["Free Books", await cnt("books", q => q.eq("category","free"))], ["Paid Books", await cnt("books", q => q.eq("category","paid"))], ["Coming Soon Books", await cnt("coming_books")], ["Total Orders", await cnt("orders")], ["Pending Payments", await cnt("orders", q => q.eq("payment_status","Pending"))], ["Paid Orders", await cnt("orders", q => q.eq("payment_status","Paid"))], ["Total Visitors", v.data?.total ?? 0], ["Contact Messages", await cnt("contact_messages")], ["Total Users", await cnt("app_users")]];
+  const us = (await sb.from("app_users").select("full_name,email,phone,created_at").order("created_at", { ascending:false }).limit(50)).data || [];
   return `<h2>Dashboard</h2><div class="stats" style="margin-top:16px">${s.map(([l, n]) => `<div class="stat"><b>${n}</b>${l}</div>`).join("")}</div>
-  <h3 style="margin:26px 0 10px">Users</h3><div class="tw"><table><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Joined</th></tr>${us.map(u => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.email)}</td><td>${esc(u.phone)}</td><td>${esc(u.role)}</td><td>${new Date(u.created_at).toLocaleDateString()}</td></tr>`).join("") || "<tr><td>No users yet.</td></tr>"}</table></div>`;
+  <h3 style="margin:26px 0 10px">Users</h3><div class="tw"><table><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Joined</th></tr>${us.map(u => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.email)}</td><td>${esc(u.phone)}</td><td>user</td><td>${new Date(u.created_at).toLocaleDateString()}</td></tr>`).join("") || "<tr><td>No users yet.</td></tr>"}</table></div>`;
 }
 
 // ===== STORAGE =====
